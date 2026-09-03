@@ -79,13 +79,13 @@ class Ranking(unittest.TestCase):
         self.s = Store(":memory:")
         for i, text in enumerate([
                 "the scheduler learns per-weekday posting times",
-                "regenerate the instagram token from the app dashboard",
+                "rotate the api token from the provider dashboard",
                 "ffmpeg concatenates the rendered scenes into one file"]):
             self.s.add("doc.md", "H", i, text, [0.0] * 8)
         self.s.commit()
 
     def test_bm25_finds_an_exact_identifier(self):
-        top = self.s.keyword_search("instagram token", k=1)
+        top = self.s.keyword_search("api token", k=1)
         self.assertEqual(self.s.get(top[0][1])["ord"], 1)
 
     def test_bm25_returns_nothing_for_absent_terms(self):

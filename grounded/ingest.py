@@ -24,6 +24,35 @@ MIN_TOKENS = 12           # below this a chunk is a heading, not content
 HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 FENCE = re.compile(r"^\s*(```|~~~)")
 
+ANCHOR = re.compile(r"\s*\{#[-\w]+\}\s*$")
+FRONT_MATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
+TITLE_LINE = re.compile(r"^title:\s*(.+?)\s*$", re.M)
+# {{< glossary_tooltip text="Pod" term_id="pod" >}} -> Pod
+TOOLTIP = re.compile(r"\{\{[<%]\s*glossary_tooltip[^>%}]*?text=\"([^\"]*)\"[^>%}]*?[>%]\}\}")
+SHORTCODE = re.compile(r"\{\{[<%].*?[>%]\}\}", re.S)
+
+
+def preprocess(text):
+    """Strip the publishing system's scaffolding, keep the prose.
+
+    Real documentation is not clean markdown. These docs carry YAML front
+    matter and Hugo shortcodes; embedding `{{< note >}}` teaches the index
+    nothing and dilutes the chunk. The front-matter `title` is worth keeping
+    though — it is the document's real name, and it becomes the root heading
+    so every chunk inherits it.
+    """
+    title = None
+    m = FRONT_MATTER.match(text)
+    if m:
+        t = TITLE_LINE.search(m.group(1))
+        if t:
+            title = t.group(1).strip().strip('"\'')
+        text = text[m.end():]
+    text = TOOLTIP.sub(r"\1", text)      # keep the human-readable term
+    text = SHORTCODE.sub("", text)       # drop the rest of the scaffolding
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return title, text.strip()
+
 
 def split_sections(text):
     """[(heading_path, body)] — heading-aware, in document order."""
@@ -51,7 +80,9 @@ def split_sections(text):
             flush()
             depth = len(m.group(1))
             stack[:] = stack[:depth - 1]
-            stack.append(m.group(2).strip())
+            # "## Pod logs {#basic-logging}" — the anchor is for the website's
+            # URLs and only dilutes the heading path it travels in
+            stack.append(ANCHOR.sub("", m.group(2)).strip())
         else:
             buf.append(line)
     flush()
@@ -120,10 +151,12 @@ def split_long(body, max_tokens=MAX_TOKENS, overlap=OVERLAP_TOKENS):
     return chunks
 
 
-def chunk_document(text):
+def chunk_document(text, title=None):
     """[(heading_path, chunk_text)] ready to embed."""
     out = []
     for heading, body in split_sections(text):
+        if title:
+            heading = f"{title} > {heading}" if heading else title
         for piece in split_long(body):
             if len(tokenize(piece)) < MIN_TOKENS:
                 continue
@@ -139,7 +172,8 @@ def ingest_path(path, store=None, cache=None, on_chunk=None):
     cache = cache if cache is not None else Cache()
     source = path.name
     store.clear(source)                     # re-ingesting replaces, never doubles
-    pieces = chunk_document(path.read_text())
+    title, body = preprocess(path.read_text())
+    pieces = chunk_document(body, title=title)
     for i, (heading, text) in enumerate(pieces):
         vec = embed(text, task="RETRIEVAL_DOCUMENT", cache=cache)
         store.add(source, heading, i, text, vec)
@@ -149,6 +183,13 @@ def ingest_path(path, store=None, cache=None, on_chunk=None):
     return len(pieces)
 
 
-def ingest_dir(directory, patterns=("*.md", "*.txt"), **kw):
-    files = sorted(f for p in patterns for f in Path(directory).rglob(p))
+SKIP = {"README.md", "LICENSE.md", "CONTRIBUTING.md"}
+
+
+def ingest_dir(directory, patterns=("*.md", "*.txt"), skip=SKIP, **kw):
+    """Index the corpus, not the notes about the corpus. A README describing
+    the collection is not a document someone asks questions about, and it
+    competes for retrieval with the ones that are."""
+    files = sorted(f for p in patterns for f in Path(directory).rglob(p)
+                   if f.name not in skip)
     return {f.name: ingest_path(f, **kw) for f in files}

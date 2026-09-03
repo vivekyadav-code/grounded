@@ -17,9 +17,18 @@ from .llm import generate
 from .retrieve import best_similarity, retrieve
 from .store import Store
 
-# Below this cosine, the corpus does not contain the answer. Calibrated in
-# evals.py against questions known to be outside it — not guessed.
-ABSTAIN_BELOW = 0.62
+# Below this cosine, the corpus does not contain the answer.
+#
+# Calibrated, not guessed: `./rag eval` measures the similarity distribution
+# for questions known to be inside and outside the corpus and prints the gap.
+# On the bundled corpus that gap is 0.628 (highest out-of-corpus) to 0.731
+# (lowest in-corpus), so the threshold sits in the middle of it.
+#
+# It was 0.62 first, which is BELOW the out-of-corpus maximum — the floor let
+# two Kubernetes-adjacent questions through and the model's INSUFFICIENT path
+# had to catch them. Two layers is the design, but the cheap layer should do
+# the work the measurement says it can.
+ABSTAIN_BELOW = 0.68
 
 PROMPT = """Answer the question using ONLY the numbered sources below.
 

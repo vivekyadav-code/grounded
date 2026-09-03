@@ -5,6 +5,7 @@ Failure classes are kept apart, because collapsing them is how these systems
 break: a malformed answer means retry the same provider, an availability
 failure means stop asking it for a while, and a rate limit means wait.
 """
+import http.client
 import json
 import os
 import re
@@ -35,7 +36,7 @@ class RateLimited(LLMError):
 def _key():
     if os.environ.get("GEMINI_API_KEY"):
         return os.environ["GEMINI_API_KEY"]
-    for f in (ROOT / "env.sh", ROOT.parent / "ai-video-generator" / "env.sh"):
+    for f in (ROOT / "env.sh",):
         try:
             m = re.search(r"GEMINI_API_KEY=([^\s\"']+)", f.read_text())
         except OSError:
@@ -78,9 +79,11 @@ def _gemini(prompt, schema, timeout):
             raise LLMError("rate limited") from e
         _mark_down("gemini")
         raise LLMError(f"gemini HTTP {e.code}") from e
-    except urllib.error.URLError as e:
+    except (urllib.error.URLError, http.client.HTTPException, OSError) as e:
+        # Same hole as the embedder had: RemoteDisconnected is neither a
+        # URLError nor an HTTPError and would escape uncaught.
         _mark_down("gemini")
-        raise LLMError(f"gemini unreachable: {e.reason}") from e
+        raise LLMError(f"gemini unreachable: {type(e).__name__}") from e
     try:
         return data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError) as e:

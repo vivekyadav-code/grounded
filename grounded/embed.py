@@ -4,6 +4,7 @@ a cache, so re-ingesting a corpus doesn't re-buy every vector, and a
 retry policy that tells a rate limit apart from a real failure.
 """
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -30,7 +31,7 @@ class EmbedError(RuntimeError):
 def _key():
     if os.environ.get("GEMINI_API_KEY"):
         return os.environ["GEMINI_API_KEY"]
-    for f in (ROOT / "env.sh", ROOT.parent / "ai-video-generator" / "env.sh"):
+    for f in (ROOT / "env.sh",):
         try:
             m = re.search(r"GEMINI_API_KEY=([^\s\"']+)", f.read_text())
         except OSError:
@@ -108,13 +109,20 @@ def _call(text, task, model, dims, timeout=60):
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return json.loads(r.read())["embedding"]["values"]
         except urllib.error.HTTPError as e:
-            # 429 is "slow down" and is worth waiting for; nothing else is.
-            if e.code != 429 or wait is None:
+            # 429 is "slow down" and worth waiting for. 5xx is the server
+            # having a moment. A 4xx is our fault and will not improve.
+            transient = e.code == 429 or 500 <= e.code < 600
+            if not transient or wait is None:
                 raise EmbedError(f"embedding failed: HTTP {e.code}") from e
             time.sleep(wait)
-        except urllib.error.URLError as e:
-            raise EmbedError(f"embedding failed: {e.reason}") from e
-    raise EmbedError("embedding failed: rate limited")
+        except (urllib.error.URLError, http.client.HTTPException, OSError) as e:
+            # A dropped connection mid-ingest is transient, not fatal.
+            # RemoteDisconnected is neither a URLError nor an HTTPError, so
+            # catching only those let one network hiccup kill a whole run.
+            if wait is None:
+                raise EmbedError(f"embedding failed: {type(e).__name__}: {e}") from e
+            time.sleep(wait)
+    raise EmbedError("embedding failed after retries")
 
 
 def embed(text, task="RETRIEVAL_DOCUMENT", cache=None, model=MODEL, dims=DIMS):

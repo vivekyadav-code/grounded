@@ -2,9 +2,13 @@
 
 **Answers questions about your documents, with citations — or admits it can't.**
 
-A retrieval-augmented generation service over private documentation. Hybrid
-retrieval, measured abstention, and an evaluation suite that scores retrieval,
-refusal and faithfulness independently.
+A retrieval-augmented generation service over a document corpus. Hybrid
+retrieval, a *calibrated* refusal threshold, and an evaluation suite that scores
+retrieval, refusal and faithfulness independently.
+
+The bundled corpus is Kubernetes concept documentation — public, genuinely
+technical, and messy in the way real documentation is. Swap `corpus/` for your
+own and re-run `./rag ingest`.
 
 Python 3, standard library only. No vector database, no framework, no
 `pip install`.
@@ -85,22 +89,51 @@ The suite also **calibrates the abstention threshold** instead of guessing it,
 printing the similarity distribution for in-corpus and out-of-corpus questions
 and the headroom between them.
 
-Current run against the bundled corpus of 6 documents / 60 chunks:
+Current run against the bundled corpus — 9 documents, 252 chunks:
 
 ```
-recall@5      100%   (8/8)
-abstention    5/5 refused out-of-corpus · 8/8 answered in-corpus
-threshold     0.62   in-corpus min 0.665 · out-corpus max 0.620 · headroom +0.045
-faithfulness  88-100%
+recall@5      100%   (10/10)
+abstention    5/5 refused out-of-corpus · 10/10 answered in-corpus
+threshold     0.68   in-corpus min 0.731 · out-corpus max 0.628 · headroom +0.103
+faithfulness  100%   (10/10)
 ```
+
+Two of the out-of-corpus questions are deliberately Kubernetes-adjacent — Istio
+mTLS and Helm subcharts — because refusing "what is the capital of France?" is
+not a test of anything.
+
+**The threshold was moved because the eval said to.** It was 0.62, which is
+*below* the highest out-of-corpus score of 0.628 — so the cheap similarity
+floor let two adjacent questions through and the model's `INSUFFICIENT` path had
+to catch them. Two layers is the design, but the free layer should do the work
+the measurement says it can. At 0.68, sitting in the middle of the measured gap,
+all five are refused without spending a single model call.
 
 **Faithfulness varies between runs.** The judge is a model, and on a borderline
 answer — one that synthesises across two sources rather than restating one — it
-does not always agree with itself. The pass threshold is set to tolerate one
-disagreement rather than to hide it. Majority-vote judging would tighten this
-and has not been built.
+does not always agree with itself. On an earlier corpus the same suite scored
+between 88% and 100% across runs. The pass threshold tolerates one disagreement
+rather than hiding it. Majority-vote judging would tighten this and has not
+been built.
 
-## Two bugs the tests found
+**A throttled model does not invalidate the run.** If generation is
+unreachable, the suite still scores retrieval and abstention — which are
+measurable without it, and which localise a fault — and reports `PARTIAL` with
+faithfulness explicitly *not measured*. An unknown is reported as unknown, not
+as a pass.
+
+## Handling real documentation
+
+The corpus is not clean markdown, which is the point. The ingester strips YAML
+front matter (keeping `title` as the root heading, so every chunk inherits the
+document's real name), unwraps Hugo shortcodes — `{{< glossary_tooltip
+text="Pod" ... >}}` becomes `Pod`, everything else is dropped — and removes
+`{#heading-anchors}` that exist only for the website's URLs and otherwise
+dilute the heading path they travel in. It also skips the corpus's own README:
+notes *about* a collection are not documents anyone asks questions about, and
+they compete for retrieval with the ones that are.
+
+## Bugs the tests found
 
 Recorded because they are the interesting part.
 
@@ -175,6 +208,12 @@ connection is fine from a command line and throws `ProgrammingError` on the
 first request a threaded server handles. It broke twice — once in the index
 store, then again in the embedding cache, because fixing one didn't fix the
 other. Both now use per-thread connections with WAL.
+
+**A dropped connection killed a whole ingest.** `http.client.RemoteDisconnected`
+is neither a `URLError` nor an `HTTPError`, so catching those two let one
+transient network hiccup abort a 252-chunk run. Connection-level failures now
+retry with backoff, 5xx is treated as transient, and a 4xx still fails fast
+because it is our fault and will not improve.
 
 **A rate limit was being reported as a fatal error.** The service returned 502
 when the upstream model was merely throttled, telling callers to give up on
