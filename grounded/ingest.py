@@ -25,6 +25,7 @@ HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 FENCE = re.compile(r"^\s*(```|~~~)")
 
 ANCHOR = re.compile(r"\s*\{#[-\w]+\}\s*$")
+COMMENT = re.compile(r"<!--.*?-->", re.S)
 FRONT_MATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 TITLE_LINE = re.compile(r"^title:\s*(.+?)\s*$", re.M)
 # {{< glossary_tooltip text="Pod" term_id="pod" >}} -> Pod
@@ -48,6 +49,7 @@ def preprocess(text):
         if t:
             title = t.group(1).strip().strip('"\'')
         text = text[m.end():]
+    text = COMMENT.sub("", text)         # editorial notes, not content
     text = TOOLTIP.sub(r"\1", text)      # keep the human-readable term
     text = SHORTCODE.sub("", text)       # drop the rest of the scaffolding
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -186,10 +188,23 @@ def ingest_path(path, store=None, cache=None, on_chunk=None):
 SKIP = {"README.md", "LICENSE.md", "CONTRIBUTING.md"}
 
 
-def ingest_dir(directory, patterns=("*.md", "*.txt"), skip=SKIP, **kw):
+def ingest_dir(directory, patterns=("*.md", "*.txt"), skip=SKIP, store=None, **kw):
     """Index the corpus, not the notes about the corpus. A README describing
     the collection is not a document someone asks questions about, and it
-    competes for retrieval with the ones that are."""
+    competes for retrieval with the ones that are.
+
+    Also PRUNES: a source that is no longer in the corpus has its chunks
+    deleted. Without this, removing a document leaves it answerable from a
+    stale index — and adding a filename to `skip` silently kept whatever it
+    had already contributed.
+    """
+    store = store or Store()
     files = sorted(f for p in patterns for f in Path(directory).rglob(p)
                    if f.name not in skip)
-    return {f.name: ingest_path(f, **kw) for f in files}
+    counts = {f.name: ingest_path(f, store=store, **kw) for f in files}
+
+    current = set(counts)
+    for stale in [s for s in store.sources() if s not in current]:
+        store.clear(stale)
+    store.commit()
+    return counts

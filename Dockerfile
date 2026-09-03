@@ -9,6 +9,7 @@ WORKDIR /app
 # document doesn't invalidate the code layer and vice versa.
 COPY grounded/ ./grounded/
 COPY corpus/ ./corpus/
+COPY web/ ./web/
 COPY rag ./rag
 
 # The index is BAKED AT BUILD TIME. The alternative — embedding the corpus on
@@ -19,7 +20,12 @@ COPY rag ./rag
 # The key is a BuildKit secret: mounted for this one layer, never written to
 # the filesystem, never present in the final image or its history.
 #   docker build --secret id=gemini_key,env=GEMINI_API_KEY -t grounded .
+# The cache mount matters: without it every build re-embeds the entire corpus
+# from scratch, which costs real money on a paid key and stalls behind
+# rate-limit backoff on a free one. It is a BuildKit cache, so it never
+# becomes a layer and never ships in the image — the baked index does.
 RUN --mount=type=secret,id=gemini_key \
+    --mount=type=cache,target=/app/cache,uid=0,gid=0 \
     GEMINI_API_KEY="$(cat /run/secrets/gemini_key)" python rag ingest
 
 # Runs unprivileged. The index is read-only at runtime; nothing needs to write.

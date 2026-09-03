@@ -133,6 +133,28 @@ dilute the heading path they travel in. It also skips the corpus's own README:
 notes *about* a collection are not documents anyone asks questions about, and
 they compete for retrieval with the ones that are.
 
+## More bugs, from wiring up the UI
+
+**A deleted document stayed answerable.** Excluding the corpus README from
+ingestion stopped it being *indexed* but never removed the chunks it had already
+left behind — so the index reported 253 chunks across 10 documents when the
+corpus held 252 across 9. Re-ingesting now prunes sources that are no longer
+present; without that, deleting a document leaves it live in the index.
+
+**The boot check was stricter than the service.** Config validation looked only
+at `os.environ` for the API key while the embedder also reads `env.sh`, so the
+process refused to start when it would in fact have worked. Both now ask the
+same resolver.
+
+**HTML served as JSON.** `_send()`'s third parameter is `request_id`, so passing
+a content type there sent the page as `application/json` — with the entire
+document stuffed into a response header. There is a separate `_serve_body()` now.
+
+**The answer formatter mangled fenced code.** Rendering inline `` `spans` ``
+before fenced blocks let the regex eat the ``` markers, break the YAML, and
+leave an unbalanced span that swallowed the following paragraph. These answers
+are full of YAML, so it was not a rare case.
+
 ## Bugs the tests found
 
 Recorded because they are the interesting part.
@@ -158,12 +180,27 @@ docker run -p 8080:8080 -e GEMINI_API_KEY=$GEMINI_API_KEY \
                         -e GROUNDED_API_KEY=your-token grounded
 ```
 
+Then open **http://localhost:8080** — there's a web UI.
+
 | route | |
 |---|---|
-| `POST /ask` | `{"question": "..."}` → answer, sources, whether each was cited |
+| `GET /` | the UI: ask box, cited answer, and what was retrieved with each retriever's score |
+| `POST /ask` | `{"question": "..."}` → answer, sources, scores, whether each was cited |
+| `GET /api/info` | corpus size, document list, threshold, top-k |
 | `GET /healthz` | liveness — deliberately does not touch the index |
 | `GET /readyz` | readiness — 503 until the index has chunks |
 | `GET /metrics` | Prometheus text format, no exporter dependency |
+
+**The UI shows the refusal, not just the answer.** One of the example questions
+is deliberately outside the corpus, because a RAG demo that can only show
+successful answers is hiding the behaviour that matters. Ask it and you get an
+amber card, the closest match plotted against the threshold, and a line saying
+nothing was sent to a model. Every answer shows which chunks were retrieved,
+each retriever's score, and which ones the answer actually cited.
+
+No web fonts, no CDN, no build step — the service has no dependencies and its
+UI does not introduce one. It works on a laptop with no network and in a
+container with no egress.
 
 **The index is baked at build time.** Embedding the corpus on first boot would
 pay an API bill and a cold-start delay on every replica, every deploy, forever.

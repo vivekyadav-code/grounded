@@ -14,18 +14,30 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 from .answer import ABSTAIN_BELOW, ask
 from .embed import Cache
 from .llm import RateLimited
 from .store import Store
 
+WEB = Path(__file__).resolve().parent.parent / "web"
 STARTED = time.time()
 MAX_QUESTION = 500
 
 METRICS = {"requests": 0, "answered": 0, "abstained": 0, "errors": 0,
            "rate_limited": 0, "upstream_rate_limited": 0, "unauthorized": 0}
 _lock = threading.Lock()
+
+
+def _has_key(env):
+    if env.get("GEMINI_API_KEY"):
+        return True
+    from .embed import EmbedError, _key
+    try:
+        return bool(_key())
+    except EmbedError:
+        return False
 
 
 class Config:
@@ -46,8 +58,13 @@ class Config:
             self.problems.append("GROUNDED_ABSTAIN_BELOW must be between 0 and 1")
         if self.k < 1:
             self.problems.append("GROUNDED_TOP_K must be at least 1")
-        if not env.get("GEMINI_API_KEY") and not env.get("GROUNDED_ALLOW_NO_KEY"):
-            self.problems.append("GEMINI_API_KEY is not set — embeddings will fail")
+        # Ask the embedder whether it can find a key rather than checking
+        # os.environ here: it also reads env.sh, so checking only the
+        # environment made the boot check stricter than the real capability
+        # and refused to start a service that would have worked.
+        if not env.get("GROUNDED_ALLOW_NO_KEY") and not _has_key(env):
+            self.problems.append(
+                "no Gemini API key — set GEMINI_API_KEY or put it in env.sh")
 
     @property
     def auth_required(self):
@@ -107,6 +124,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _serve_body(self, code, text, ctype):
+        body = text.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _text(self, code, text):
         body = text.encode()
         self.send_response(code)
@@ -150,9 +175,27 @@ class Handler(BaseHTTPRequestHandler):
             lines.append(f"grounded_chunks {self.store.count()}")
             lines.append(f"grounded_uptime_seconds {round(time.time() - STARTED, 1)}")
             return self._text(200, "\n".join(lines) + "\n")
+        if path == "/api/info":
+            rows = self.store.db.execute(
+                "SELECT source, COUNT(*) n FROM chunks GROUP BY source"
+                " ORDER BY source").fetchall()
+            return self._send(200, {
+                "chunks": self.store.count(),
+                "documents": [{"source": r[0], "chunks": r[1]} for r in rows],
+                "threshold": self.config.abstain_below,
+                "auth_required": self.config.auth_required,
+                "top_k": self.config.k})
         if path == "/":
+            page = WEB / "index.html"
+            if page.exists():
+                # NOT _send(): its third parameter is request_id, so passing a
+                # content type there served the page as JSON and put the whole
+                # document into a response header.
+                return self._serve_body(200, page.read_text(),
+                                        "text/html; charset=utf-8")
             return self._send(200, {"service": "grounded",
-                                    "endpoints": ["/ask", "/healthz", "/readyz", "/metrics"],
+                                    "endpoints": ["/ask", "/api/info", "/healthz",
+                                                  "/readyz", "/metrics"],
                                     "chunks": self.store.count()})
         return self._send(404, {"error": "not found"})
 
@@ -244,10 +287,12 @@ class Handler(BaseHTTPRequestHandler):
             "answered": r["answered"],
             "answer": r["answer"],
             "top_score": round(r["top_score"], 4),
+            "threshold": self.config.abstain_below,
             "sources": [
                 {"n": i, "source": h["source"], "heading": h["heading"],
-                 "cited": i in r["citations"]}
-                for i, (h, _s, _w) in enumerate(r["hits"], 1)],
+                 "cited": i in r["citations"], "score": round(score, 4),
+                 "why": why, "excerpt": h["text"][:300]}
+                for i, (h, score, why) in enumerate(r["hits"], 1)],
         }
         log(level="info", request_id=request_id, path=path, status=200,
             client=who, answered=r["answered"], top_score=round(r["top_score"], 4),

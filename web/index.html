@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>grounded</title>
+<style>
+/* No web fonts, no CDN, no build step — the service has no dependencies and
+   its UI shouldn't introduce one. It has to work on a laptop with no network
+   and inside a container with no egress. */
+:root{
+  --paper:#f5f5f2; --card:#fffffe; --ink:#15181b; --ink-2:#4c5257; --ink-3:#7c848a;
+  --rule:#dcdcd6; --rule-2:#eaeae4;
+  --accent:#0d6e66; --accent-soft:#e2efed;
+  --warn:#9a5b0a; --warn-soft:#f7eee0;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root{
+  --paper:#101315; --card:#171b1e; --ink:#e6e9ea; --ink-2:#a3abb0; --ink-3:#767e84;
+  --rule:#272c30; --rule-2:#1f2427;
+  --accent:#4fd6c6; --accent-soft:#12302d;
+  --warn:#e0a44f; --warn-soft:#2c2416;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+     font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:860px;margin:0 auto;padding:34px 22px 70px}
+h1{font-size:21px;margin:0;letter-spacing:-.01em}
+h1 b{color:var(--accent)}
+.sub{color:var(--ink-2);margin:6px 0 0;font-size:14.5px;max-width:62ch}
+.meta{font-family:var(--mono);font-size:11.5px;color:var(--ink-3);margin-top:12px;
+      display:flex;flex-wrap:wrap;gap:4px 18px}
+.meta b{color:var(--ink);font-weight:500}
+
+form{margin:26px 0 0;display:flex;gap:8px}
+input[type=text]{flex:1;min-width:0;font:inherit;font-size:15px;padding:11px 13px;
+  border:1px solid var(--rule);border-radius:9px;background:var(--card);color:var(--ink)}
+input[type=text]:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
+button{font:inherit;font-weight:600;font-size:14.5px;padding:11px 18px;border:0;
+  border-radius:9px;background:var(--accent);color:var(--paper);cursor:pointer}
+button:disabled{opacity:.55;cursor:default}
+.examples{display:flex;flex-wrap:wrap;gap:6px;margin-top:11px}
+.examples button{background:transparent;border:1px solid var(--rule);color:var(--ink-2);
+  font-weight:400;font-size:12.5px;padding:5px 11px;border-radius:999px}
+.examples button:hover{border-color:var(--accent);color:var(--ink)}
+.examples button.neg{border-style:dashed}
+
+.state{margin-top:26px;font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+.card{margin-top:14px;background:var(--card);border:1px solid var(--rule);
+  border-radius:12px;padding:18px 20px}
+.card.abstained{border-color:var(--warn);background:var(--warn-soft)}
+.verdict{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+  display:flex;align-items:center;gap:8px;margin-bottom:11px}
+.verdict .dot{width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.card.abstained .verdict{color:var(--warn)}
+.card.abstained .verdict .dot{background:var(--warn)}
+.answer{white-space:pre-wrap}
+.answer :is(strong,b){font-weight:600}
+.answer code{font-family:var(--mono);font-size:12.5px;background:var(--rule-2);
+  border:1px solid var(--rule);border-radius:5px;padding:1px 5px;color:var(--ink)}
+.answer pre{background:var(--rule-2);border:1px solid var(--rule);border-radius:8px;
+  padding:11px 13px;overflow-x:auto;margin:10px 0}
+.answer pre code{background:none;border:0;padding:0;font-size:12px;line-height:1.55}
+.cite{font-family:var(--mono);font-size:11.5px;color:var(--accent);
+  background:var(--accent-soft);border-radius:4px;padding:1px 5px;
+  cursor:pointer;border:0}
+.cite:hover{text-decoration:underline}
+
+.gauge{margin-top:14px;font-family:var(--mono);font-size:11.5px;color:var(--ink-3)}
+.bar{position:relative;height:6px;background:var(--rule-2);border-radius:99px;margin:7px 0 5px}
+.bar .fill{position:absolute;inset:0 auto 0 0;background:var(--accent);border-radius:99px}
+.card.abstained .bar .fill{background:var(--warn)}
+.bar .mark{position:absolute;top:-4px;width:2px;height:14px;background:var(--ink-2)}
+
+h2{font-size:13px;font-family:var(--mono);font-weight:500;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink-3);margin:30px 0 0}
+.src{border-top:1px solid var(--rule-2);padding:12px 0}
+.src:last-child{border-bottom:1px solid var(--rule-2)}
+.src-head{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}
+.n{font-family:var(--mono);font-size:11.5px;color:var(--ink-3);min-width:22px}
+.where{font-size:13.5px}
+.where .file{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+.badge{font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;
+  padding:2px 7px;border-radius:99px;background:var(--accent-soft);color:var(--accent)}
+.why{font-family:var(--mono);font-size:11.5px;color:var(--ink-3);margin-top:5px;
+  padding-left:22px}
+.excerpt{font-size:13px;color:var(--ink-2);margin-top:6px;padding-left:22px}
+footer{margin-top:38px;padding-top:16px;border-top:1px solid var(--rule-2);
+  font-family:var(--mono);font-size:11.5px;color:var(--ink-3);line-height:1.7}
+footer a{color:var(--accent)}
+.tokenrow{margin-top:12px;display:none;gap:8px}
+.tokenrow.show{display:flex}
+.tokenrow input{flex:1;font-family:var(--mono);font-size:12.5px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ground<b>ed</b></h1>
+  <p class="sub">Ask a question about the indexed documents. Every factual sentence
+    carries the source it came from &mdash; and if the corpus doesn&rsquo;t contain
+    the answer, it says so instead of inventing one.</p>
+  <div class="meta" id="meta"></div>
+
+  <form id="form" autocomplete="off">
+    <input type="text" id="q" placeholder="How do I roll back a Deployment?"
+           aria-label="Your question">
+    <button id="go" type="submit">Ask</button>
+  </form>
+  <div class="tokenrow" id="tokenrow">
+    <input type="text" id="token" placeholder="API token" aria-label="API token">
+  </div>
+
+  <div class="examples" id="examples"></div>
+  <div class="state" id="state"></div>
+  <div id="out"></div>
+
+  <footer>
+    Hybrid retrieval &mdash; dense vectors and BM25, fused by reciprocal rank.
+    The refusal threshold is calibrated by the evaluation suite, not guessed.<br>
+    Corpus: Kubernetes documentation, &copy; The Kubernetes Authors,
+    <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.
+    &nbsp;·&nbsp; <a href="https://github.com/vivekyadav-code/grounded">source</a>
+  </footer>
+</div>
+
+<script>
+const EXAMPLES = [
+  ["How do I roll back a Deployment to a previous revision?", false],
+  ["What is a headless Service?", false],
+  ["What are the reclaim policies for a PersistentVolume?", false],
+  // Deliberately outside the corpus. Most RAG demos hide this; it is the
+  // most important behaviour to be able to show.
+  ["What does Amazon EKS cost per month?", true],
+];
+let info = {threshold: 0.68, auth_required: false};
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function renderMeta(){
+  $("meta").innerHTML =
+    `<span><b>${info.chunks ?? "–"}</b> chunks</span>` +
+    `<span><b>${(info.documents||[]).length}</b> documents</span>` +
+    `<span>refusal threshold <b>${info.threshold}</b></span>` +
+    `<span>top-k <b>${info.top_k ?? 5}</b></span>`;
+}
+function renderExamples(){
+  $("examples").innerHTML = "";
+  for (const [q, negative] of EXAMPLES){
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = negative ? "neg" : "";
+    b.textContent = negative ? q + "  (not in the corpus)" : q;
+    b.addEventListener("click", () => { $("q").value = q; ask(); });
+    $("examples").appendChild(b);
+  }
+}
+
+/* Escape first, then re-introduce only what is worth rendering: fenced
+   blocks, `code spans`, and [n] citation markers that scroll to their source.
+   Fences MUST be handled before inline spans — a single-backtick regex run
+   first eats the ``` markers, mangles the block, and leaves an unbalanced
+   span that swallows the paragraph after it. These answers are full of YAML,
+   so that was not a rare case. */
+function format(text){
+  const parts = esc(text).split(/```/);
+  return parts.map((part, i) => {
+    if (i % 2 === 1){                       // inside a fence
+      const body = part.replace(/^[a-z]*\n/i, "");   // drop the language tag
+      return `<pre><code>${body.replace(/^\n+|\n+$/g, "")}</code></pre>`;
+    }
+    return part
+      .replace(/`([^`\n]+)`/g, (_m, code) => `<code>${code}</code>`)
+      .replace(/\[(\d+)\]/g, (_m, n) => `<button class="cite" data-n="${n}">[${n}]</button>`);
+  }).join("");
+}
+
+function render(d){
+  const abstained = !d.answered;
+  const pct = Math.max(2, Math.min(100, d.top_score * 100));
+  const cited = (d.sources || []).filter(s => s.cited).length;
+
+  let html = `<div class="card${abstained ? " abstained" : ""}">
+    <div class="verdict"><span class="dot"></span>${
+      abstained ? "No answer in the corpus" : "Answered from " + cited + " source" + (cited === 1 ? "" : "s")
+    }</div>
+    <div class="answer">${format(d.answer)}</div>
+    <div class="gauge">
+      closest match ${d.top_score.toFixed(3)} · threshold ${(d.threshold ?? info.threshold)}
+      <div class="bar"><div class="fill" style="width:${pct}%"></div>
+        <div class="mark" style="left:${(d.threshold ?? info.threshold) * 100}%"></div></div>
+      ${abstained
+        ? "below the threshold, so nothing was sent to a model"
+        : "above the threshold, so the retrieved sources were used"}
+    </div>
+  </div>`;
+
+  if ((d.sources || []).length){
+    html += `<h2>What was retrieved</h2>`;
+    for (const s of d.sources){
+      html += `<div class="src" id="src-${s.n}">
+        <div class="src-head">
+          <span class="n">[${s.n}]</span>
+          <span class="where"><span class="file">${esc(s.source)}</span>${
+            s.heading ? " &nbsp;·&nbsp; " + esc(s.heading) : ""}</span>
+          ${s.cited ? '<span class="badge">cited</span>' : ""}
+        </div>
+        <div class="why">fused ${s.score} &nbsp;(${esc(s.why || "")})</div>
+        <div class="excerpt">${esc((s.excerpt || "").replace(/\s+/g, " ")).slice(0, 240)}…</div>
+      </div>`;
+    }
+  }
+  $("out").innerHTML = html;
+  for (const b of document.querySelectorAll(".cite")){
+    b.addEventListener("click", () => {
+      const el = $("src-" + b.dataset.n);
+      if (el) el.scrollIntoView({behavior: "smooth", block: "center"});
+    });
+  }
+}
+
+let busy = false;
+async function ask(){
+  const q = $("q").value.trim();
+  if (!q || busy) return;
+  busy = true; $("go").disabled = true;
+  $("state").textContent = "retrieving…";
+  $("out").innerHTML = "";
+  const headers = {"Content-Type": "application/json"};
+  const token = $("token").value.trim();
+  if (token) headers["Authorization"] = "Bearer " + token;
+  try {
+    const res = await fetch("/ask", {method: "POST", headers,
+      body: JSON.stringify({question: q})});
+    const d = await res.json();
+    if (res.status === 401){
+      $("tokenrow").classList.add("show");
+      $("state").textContent = "this instance requires an API token — enter it above and ask again";
+      return;
+    }
+    if (res.status === 503){
+      $("state").textContent = (d.error || "upstream is busy") +
+        " — retrieval still worked; try again in a moment";
+      return;
+    }
+    if (!res.ok){
+      $("state").textContent = d.error || ("request failed (" + res.status + ")");
+      return;
+    }
+    $("state").textContent = "";
+    render(d);
+  } catch (e){
+    $("state").textContent = "could not reach the service";
+  } finally {
+    busy = false; $("go").disabled = false;
+  }
+}
+
+$("form").addEventListener("submit", (e) => { e.preventDefault(); ask(); });
+renderExamples(); renderMeta();
+fetch("/api/info").then(r => r.json()).then(d => {
+  info = Object.assign(info, d);
+  renderMeta();
+  if (info.auth_required) $("tokenrow").classList.add("show");
+}).catch(() => {});
+</script>
+</body>
+</html>
