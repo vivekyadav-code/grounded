@@ -9,6 +9,7 @@ import os
 import re
 import sqlite3
 import struct
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -48,16 +49,31 @@ def unpack(blob):
 
 
 class Cache:
-    """Content-addressed: the same text at the same model is bought once."""
+    """Content-addressed: the same text at the same model is bought once.
+
+    Per-thread connections, for the same reason as the Store: one shared
+    sqlite3 connection is fine from a CLI and throws on the first concurrent
+    request a threaded server handles.
+    """
 
     def __init__(self, path=None):
         self.path = Path(path or ROOT / "cache" / "embeddings.db")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.path)
-        self.db.execute("CREATE TABLE IF NOT EXISTS vec ("
-                        "k TEXT PRIMARY KEY, model TEXT, dims INT, v BLOB)")
-        self.db.commit()
+        self._local = threading.local()
+        self._counts = threading.Lock()
         self.hits = self.misses = 0
+        self.db.execute("PRAGMA journal_mode=WAL")
+
+    @property
+    def db(self):
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self.path, timeout=10)
+            conn.execute("CREATE TABLE IF NOT EXISTS vec ("
+                         "k TEXT PRIMARY KEY, model TEXT, dims INT, v BLOB)")
+            conn.commit()
+            self._local.conn = conn
+        return conn
 
     @staticmethod
     def key(text, model, dims):
@@ -67,9 +83,11 @@ class Cache:
         row = self.db.execute("SELECT v FROM vec WHERE k=?",
                               (self.key(text, model, dims),)).fetchone()
         if row:
-            self.hits += 1
+            with self._counts:
+                self.hits += 1
             return unpack(row[0])
-        self.misses += 1
+        with self._counts:
+            self.misses += 1
         return None
 
     def put(self, text, vec, model=MODEL, dims=DIMS):

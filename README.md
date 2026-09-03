@@ -117,6 +117,73 @@ a fact sitting on a seam was lost from both sides. The docstring claimed a
 guarantee the code didn't provide. Now it carries trailing words when a whole
 paragraph won't fit, and never cuts a code fence in half.
 
+## Running it as a service
+
+```bash
+docker build --secret id=gemini_key,env=GEMINI_API_KEY -t grounded .
+docker run -p 8080:8080 -e GEMINI_API_KEY=$GEMINI_API_KEY \
+                        -e GROUNDED_API_KEY=your-token grounded
+```
+
+| route | |
+|---|---|
+| `POST /ask` | `{"question": "..."}` → answer, sources, whether each was cited |
+| `GET /healthz` | liveness — deliberately does not touch the index |
+| `GET /readyz` | readiness — 503 until the index has chunks |
+| `GET /metrics` | Prometheus text format, no exporter dependency |
+
+**The index is baked at build time.** Embedding the corpus on first boot would
+pay an API bill and a cold-start delay on every replica, every deploy, forever.
+Baking makes the image immutable and the first request as fast as the
+thousandth. The key is passed as a BuildKit secret, mounted for that one layer
+and never written into the image or its history.
+
+**Liveness and readiness are different questions.** `/healthz` says the process
+is alive and must not depend on the index, or a slow dependency gets the
+container killed. `/readyz` says it can actually serve, and gates traffic
+instead. Fly's health check points at `/readyz` for exactly this reason.
+
+**Failure classes reach the caller intact.** An upstream rate limit returns
+**503 with `Retry-After`**, not 502 — it's temporary and the client should back
+off and retry. A genuine fault returns 502 with a request id and no stack
+trace. `/metrics` counts them separately, because a spike in one means
+something completely different from a spike in the other.
+
+**Logs are the trace.** One JSON object per line to stdout with a correlation
+id, the retrieval outcome, top score, provider and duration. In a container the
+SQLite trace table would be ephemeral and lost on restart, so the service
+disables it and lets the platform collect the logs — which is what a log
+shipper can actually query.
+
+Config is validated at boot and the process refuses to start if it's wrong,
+rather than failing on whichever request first hits the broken path.
+
+Deploying to Fly (`fly.toml` included):
+
+```bash
+fly launch --no-deploy
+fly secrets set GEMINI_API_KEY=... GROUNDED_API_KEY=...
+fly deploy
+```
+
+## Two more bugs, found only by running the container
+
+Both are the kind that a CLI can never surface.
+
+**SQLite connections belong to the thread that opened them.** One shared
+connection is fine from a command line and throws `ProgrammingError` on the
+first request a threaded server handles. It broke twice — once in the index
+store, then again in the embedding cache, because fixing one didn't fix the
+other. Both now use per-thread connections with WAL.
+
+**A rate limit was being reported as a fatal error.** The service returned 502
+when the upstream model was merely throttled, telling callers to give up on
+something that would work again in a minute. It now raises a distinct
+`RateLimited` and answers 503 with `Retry-After`. The first attempt at the rule
+was still wrong: it required *every* provider to be throttled, so a second
+provider simply being absent downgraded a retryable condition back into a fatal
+one.
+
 ## Layout
 
 ```
@@ -128,6 +195,7 @@ grounded/
   answer.py     context assembly · cited generation · abstention
   llm.py        provider chain with separated failure classes
   evals.py      recall · abstention · faithfulness · threshold calibration
+  serve.py      HTTP API · auth · rate limiting · health · metrics
   cli.py
 corpus/         the indexed documents
 tests/          21 offline tests, no network

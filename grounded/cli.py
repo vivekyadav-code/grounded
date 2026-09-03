@@ -90,6 +90,14 @@ def cmd_trace(a):
         print()
 
 
+def cmd_serve(a):
+    from .serve import Config, serve
+    cfg = Config()
+    if a.port:
+        cfg.port = a.port
+    serve(cfg)
+
+
 def cmd_status(a):
     store = Store()
     print(f"index      {store.path}")
@@ -118,6 +126,9 @@ def main(argv=None):
     p.set_defaults(fn=cmd_eval)
     p = sub.add_parser("trace"); p.add_argument("n", nargs="?", type=int, default=5)
     p.set_defaults(fn=cmd_trace)
+    p = sub.add_parser("serve", help="run the HTTP service")
+    p.add_argument("--port", type=int); p.set_defaults(fn=cmd_serve)
+
     sub.add_parser("status").set_defaults(fn=cmd_status)
 
     a = ap.parse_args(argv)

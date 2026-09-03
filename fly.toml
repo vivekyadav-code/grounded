@@ -1,0 +1,32 @@
+# fly.io deployment. `fly launch --no-deploy` then `fly deploy`.
+#
+# Secrets are set once and live in Fly's vault, never in this file:
+#   fly secrets set GEMINI_API_KEY=... GROUNDED_API_KEY=...
+app = "grounded"
+primary_region = "sin"          # Singapore — nearest region to Pune
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  GROUNDED_RATE_LIMIT = "30"
+  GROUNDED_TOP_K = "5"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"   # scale to zero: this is a demo, not a SLA
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/readyz"            # readiness gates traffic, not liveness
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"              # index is ~60 chunks; exact search is cheap

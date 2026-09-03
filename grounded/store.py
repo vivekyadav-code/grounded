@@ -14,6 +14,7 @@ import json
 import math
 import re
 import sqlite3
+import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -54,13 +55,43 @@ def tokenize(text):
 
 
 class Store:
+    """Connections are per-thread.
+
+    A sqlite3 connection belongs to the thread that opened it, so a single
+    shared connection works perfectly from a CLI and throws
+    ProgrammingError on the first request a threaded HTTP server handles.
+    In-memory databases are the exception: a per-thread ":memory:" would be
+    a different empty database each time, so those share one connection.
+    """
+
     def __init__(self, path=DB):
-        self.path = Path(path)
-        self.db = sqlite3.connect(self.path)
-        self.db.row_factory = sqlite3.Row
-        self.db.executescript(SCHEMA)
-        self.db.commit()
+        self.memory = str(path) == ":memory:"
+        self.path = ":memory:" if self.memory else Path(path)
+        self._local = threading.local()
+        self._shared = None
         self._bm25 = None
+        self._bm25_lock = threading.Lock()
+        if self.memory:
+            self._shared = self._connect()
+        else:
+            self.db.execute("PRAGMA journal_mode=WAL")   # readers don't block
+
+    def _connect(self):
+        conn = sqlite3.connect(self.path, timeout=10, check_same_thread=self.memory is False)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(SCHEMA)
+        conn.commit()
+        return conn
+
+    @property
+    def db(self):
+        if self._shared is not None:
+            return self._shared
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = self._connect()
+            self._local.conn = conn
+        return conn
 
     # ---------------------------------------------------------------- write
     def clear(self, source=None):
@@ -120,6 +151,7 @@ class Store:
 
     # ---------------------------------------------------------------- bm25
     def _build_bm25(self):
+        """Guarded so concurrent requests build the index once, not N times."""
         docs, df = {}, Counter()
         total = 0
         for r in self.all_chunks():
@@ -136,7 +168,9 @@ class Store:
         """Plain BM25. Vectors miss exact identifiers — a function name, a flag,
         an error string — and those are exactly what people search docs for."""
         if self._bm25 is None:
-            self._build_bm25()
+            with self._bm25_lock:
+                if self._bm25 is None:
+                    self._build_bm25()
         idx = self._bm25
         terms = tokenize(query)
         scores = {}

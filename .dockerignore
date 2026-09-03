@@ -1,0 +1,9 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+tests
+cache/
+index.db
+env.sh
+README.md

@@ -26,6 +26,12 @@ class LLMError(RuntimeError):
     pass
 
 
+class RateLimited(LLMError):
+    """Every provider said "slow down". Distinct from failure because the
+    caller should retry rather than give up — and the HTTP layer must say so
+    with a 503 and Retry-After, not a 502."""
+
+
 def _key():
     if os.environ.get("GEMINI_API_KEY"):
         return os.environ["GEMINI_API_KEY"]
@@ -133,4 +139,10 @@ def generate(prompt, schema=None, timeout=90, order=None):
                 return _extract_json(text), name   # bad output: retry once
             except LLMError as e:
                 errors.append(f"{name}: attempt {attempt}: {e}")
+    # Any provider throttled means waiting may genuinely help. A second
+    # provider being absent (not installed, cooling down) is an availability
+    # condition — it doesn't make the throttle permanent, so it must not
+    # downgrade a retryable answer into a fatal one.
+    if any("rate limited" in e for e in errors):
+        raise RateLimited("upstream rate limited")
     raise LLMError("all providers failed — " + "; ".join(errors[:4]))
